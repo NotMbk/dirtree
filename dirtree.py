@@ -15,76 +15,68 @@ import fnmatch
 from pathlib import Path
 from typing import List, Set, Optional
 
-# Default ignore patterns - common directories/files to ignore
-DEFAULT_IGNORE_PATTERNS = {
-    # Dependencies
-    'node_modules',
-    '__pycache__',
-    '.venv',
-    'venv',
-    'env',
-    'vendor',
-    'bower_components',
+# Try to import ignore patterns, fallback to basic set if not available
+try:
+    from ignore_patterns import (
+        DEFAULT_IGNORE_PATTERNS,
+        MINIMAL_PATTERNS,
+        AGGRESSIVE_PATTERNS,
+        get_patterns_by_category,
+        get_language_patterns
+    )
+except ImportError:
+    # Fallback patterns if ignore_patterns.py is not available
+    DEFAULT_IGNORE_PATTERNS = {
+        'node_modules', '__pycache__', '.venv', 'venv', '.git',
+        'dist', 'build', '.next', '.idea', '.vscode', '*.log'
+    }
+    MINIMAL_PATTERNS = {'node_modules', '__pycache__', '.git'}
+    AGGRESSIVE_PATTERNS = DEFAULT_IGNORE_PATTERNS
     
-    # Build outputs
-    'dist',
-    'build',
-    'out',
-    '.next',
-    '.nuxt',
-    'target',
-    'bin',
-    'obj',
+    def get_patterns_by_category(categories=None):
+        return DEFAULT_IGNORE_PATTERNS
     
-    # Version control
-    '.git',
-    '.svn',
-    '.hg',
-    
-    # IDE/Editor files
-    '.vscode',
-    '.idea',
-    '*.swp',
-    '*.swo',
-    '*~',
-    
-    # OS files
-    '.DS_Store',
-    'Thumbs.db',
-    'desktop.ini',
-    
-    # Temporary files
-    '*.tmp',
-    '*.temp',
-    '.cache',
-    'tmp',
-    'temp',
-    
-    # Logs
-    '*.log',
-    'logs',
-    
-    # Coverage/Test outputs
-    'coverage',
-    '.coverage',
-    '.nyc_output',
-    'htmlcov',
-    '.pytest_cache',
-    '.tox',
-}
+    def get_language_patterns(language):
+        return set()
 
 class DirectoryTreeGenerator:
     """Main class for generating directory trees with advanced features."""
     
     def __init__(self, ignore_patterns: Optional[Set[str]] = None, 
                  show_hidden: bool = False, max_depth: Optional[int] = None,
-                 use_default_ignores: bool = True):
+                 use_default_ignores: bool = True, pattern_mode: str = 'default'):
+        """
+        Initialize the tree generator.
+        
+        Args:
+            ignore_patterns: Custom patterns to ignore
+            show_hidden: Show hidden files/directories
+            max_depth: Maximum depth to traverse
+            use_default_ignores: Whether to use default ignore patterns
+            pattern_mode: Which default patterns to use ('default', 'minimal', 'aggressive')
+        """
         self.ignore_patterns = ignore_patterns or set()
-        if use_default_ignores:
-            self.ignore_patterns.update(DEFAULT_IGNORE_PATTERNS)
         self.show_hidden = show_hidden
         self.max_depth = max_depth
         
+        if use_default_ignores:
+            if pattern_mode == 'minimal':
+                self.ignore_patterns.update(MINIMAL_PATTERNS)
+            elif pattern_mode == 'aggressive':
+                self.ignore_patterns.update(AGGRESSIVE_PATTERNS)
+            else:  # default
+                self.ignore_patterns.update(DEFAULT_IGNORE_PATTERNS)
+        
+    def add_language_patterns(self, language: str) -> None:
+        """Add language-specific ignore patterns."""
+        patterns = get_language_patterns(language)
+        self.ignore_patterns.update(patterns)
+    
+    def add_category_patterns(self, categories: List[str]) -> None:
+        """Add patterns from specific categories."""
+        patterns = get_patterns_by_category(categories)
+        self.ignore_patterns.update(patterns)
+    
     def load_ignore_file(self, ignore_file_path: str) -> None:
         """Load ignore patterns from a file (similar to .gitignore format)."""
         try:
@@ -273,9 +265,12 @@ def main():
     max_depth = None
     show_hidden = False
     use_default_ignores = True
+    pattern_mode = 'default'
     custom_ignore_patterns = set()
     ignore_file = None
     output_file = None
+    language = None
+    categories = None
     
     # Parse command line arguments
     i = 1
@@ -298,6 +293,15 @@ def main():
             show_hidden = True
         elif arg == "--no-default-ignores":
             use_default_ignores = False
+        elif arg.startswith("--pattern-mode="):
+            pattern_mode = arg.split("=")[1]
+            if pattern_mode not in ['default', 'minimal', 'aggressive']:
+                print("Error: pattern-mode must be 'default', 'minimal', or 'aggressive'")
+                return
+        elif arg.startswith("--language="):
+            language = arg.split("=")[1]
+        elif arg.startswith("--categories="):
+            categories = arg.split("=")[1].split(",")
         elif arg.startswith("--ignore="):
             patterns = arg.split("=")[1].split(",")
             custom_ignore_patterns.update(patterns)
@@ -319,8 +323,17 @@ def main():
         ignore_patterns=custom_ignore_patterns,
         show_hidden=show_hidden,
         max_depth=max_depth,
-        use_default_ignores=use_default_ignores
+        use_default_ignores=use_default_ignores,
+        pattern_mode=pattern_mode
     )
+    
+    # Add language-specific patterns if specified
+    if language:
+        generator.add_language_patterns(language)
+    
+    # Add category-specific patterns if specified
+    if categories:
+        generator.add_category_patterns(categories)
     
     # Load ignore file if specified or look for default ones
     ignore_files_to_check = []
@@ -351,10 +364,7 @@ def main():
 def print_help():
     """Print help information."""
     help_text = """
-Directory Tree Generator v2.0
-
-A powerful command-line tool to generate directory tree structures with 
-advanced filtering and customization options.
+dirtree - Directory Tree Generator v2.0
 
 USAGE:
     python dirtree.py [DIRECTORY] [OPTIONS]
@@ -365,57 +375,27 @@ ARGUMENTS:
 OPTIONS:
     -h, --help          Show this help message
     --depth=N           Limit tree depth to N levels
-    --show-hidden       Show hidden files and directories (starting with .)
+    --show-hidden       Show hidden files and directories
     --no-default-ignores Disable default ignore patterns
+    --pattern-mode=MODE Pattern mode: 'default', 'minimal', or 'aggressive'
+    --language=LANG     Add language-specific patterns (python, javascript, etc.)
+    --categories=LIST   Add specific categories (deps,build,vcs,ide,os,temp,logs)
     --ignore=PATTERNS   Comma-separated list of patterns to ignore
-    --ignore-file=FILE  Use custom ignore file (default: .dirtreeignore)
+    --ignore-file=FILE  Use custom ignore file
     --output=FILE       Save output to file instead of displaying
     --create-ignore     Create a default .dirtreeignore file
 
-IGNORE PATTERNS:
-    Supports glob patterns like:
-    - node_modules      (exact match)
-    - *.log            (all .log files)  
-    - temp*            (files starting with 'temp')
-    - **/__pycache__   (nested patterns)
-
-IGNORE FILES:
-    The tool automatically looks for ignore files in this order:
-    1. Custom file specified with --ignore-file
-    2. .dirtreeignore
-    3. .treeignore
-    4. dirtree.ignore
-    
-    Ignore file format (similar to .gitignore):
-    - One pattern per line
-    - Lines starting with # are comments
-    - Empty lines are ignored
+PATTERN MODES:
+    default    - Standard ignore patterns (recommended)
+    minimal    - Only ignore dependencies, VCS, and OS files
+    aggressive - Ignore everything including minified files, assets
 
 EXAMPLES:
-    # Basic usage
     python dirtree.py
     python dirtree.py /path/to/project
-    
-    # With options
-    python dirtree.py . --depth=3 --show-hidden
-    python dirtree.py /project --ignore=*.pyc,temp*,logs
-    python dirtree.py . --ignore-file=my_ignore.txt
-    python dirtree.py /project --output=project_structure.md
-    
-    # Create ignore file template
-    python dirtree.py --create-ignore
-
-DEFAULT IGNORED ITEMS:
-    Dependencies: node_modules, __pycache__, .venv, venv, vendor, etc.
-    Build outputs: dist, build, out, .next, target, bin, obj, etc.
-    Version control: .git, .svn, .hg
-    IDE files: .vscode, .idea, *.swp, etc.
-    OS files: .DS_Store, Thumbs.db, desktop.ini
-    Temporary: *.tmp, .cache, tmp, temp, logs, etc.
-    
-    Use --no-default-ignores to disable these defaults.
-
-GITHUB: https://github.com/yourusername/directory-tree-generator
+    python dirtree.py . --depth=3 --pattern-mode=minimal
+    python dirtree.py . --language=python --categories=deps,build
+    python dirtree.py . --ignore=*.pyc,temp* --output=structure.md
 """
     print(help_text)
 
